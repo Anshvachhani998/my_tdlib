@@ -7,8 +7,8 @@ setup(
     description="Custom Telegram TDLib utilities and downloader",
     packages=find_packages(),
     install_requires=[
-        "pyrogram<=2.0.33",
-        "tgcrypto<=1.2.3"
+        "tgcrypto",  # Always install latest tgcrypto
+        "git+https://github.com/TelegramPlayground/pyrogram.git"
     ],
-    python_requires=">=3.8",
+    python_requires=">=3.10",
 )
