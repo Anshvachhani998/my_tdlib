@@ -1,4 +1,5 @@
 # my_tdlib/downloader.py
+
 import asyncio
 import time
 from .utils import format_size, format_time
@@ -98,3 +99,56 @@ class TDDownloader:
     def run(self):
         print("⚡ TDDownloader client running...")
         self.client.run()
+
+
+# 🆕 ADD THIS BELOW
+class TDFileHelper:
+    def __init__(self, td_client):
+        self.client = td_client
+
+    async def get_file_info(self, chat_id: int, message_id: int):
+        """
+        Fetch TDLib file info (file_id, file_name, file_type) using chat_id & message_id.
+        Returns: dict with keys: file_id, file_name, file_type or None if not found.
+        """
+        try:
+            msg = await self.client.invoke({
+                "@type": "getMessage",
+                "chat_id": chat_id,
+                "message_id": message_id
+            })
+
+            if not msg or not hasattr(msg, "content"):
+                return None
+
+            content = msg.content
+            file_id = file_name = file_type = None
+
+            if hasattr(content, "document") and hasattr(content.document, "document"):
+                file_id = content.document.document.id
+                file_name = getattr(content.document, "file_name", "document")
+                file_type = "document"
+            elif hasattr(content, "video") and hasattr(content.video, "video"):
+                file_id = content.video.video.id
+                file_name = getattr(content.video, "file_name", "video.mp4")
+                file_type = "video"
+            elif hasattr(content, "photo") and hasattr(content.photo.sizes[-1], "photo"):
+                file_id = content.photo.sizes[-1].photo.id
+                file_name = f"photo_{message_id}.jpg"
+                file_type = "photo"
+            elif hasattr(content, "audio") and hasattr(content.audio, "audio"):
+                file_id = content.audio.audio.id
+                file_name = getattr(content.audio, "file_name", "audio.mp3")
+                file_type = "audio"
+
+            if file_id:
+                return {
+                    "file_id": file_id,
+                    "file_name": file_name,
+                    "file_type": file_type
+                }
+            return None
+
+        except Exception as e:
+            print(f"❌ Error fetching TDLib file info: {e}")
+            return None
