@@ -1,25 +1,19 @@
-# my_tdlib/downloader.py
+# my_tdlib/downloader.py  🚀 FULL ADVANCED
 
 import asyncio
 import time
-from .utils import format_size, format_time
-from .config import get_client
+import os
 import logging
+import math
+import subprocess
+from .config import get_client
 
 
 class TDDownloader:
     def __init__(self, api_id, api_hash, token, encryption_key="1234_ast$"):
-        """
-        Initialize the TDDownloader with mandatory TDLib credentials.
-        """
         self.client = get_client(api_id, api_hash, token, encryption_key)
 
     async def download_file(self, file_id, file_name, *, on_progress=None):
-        """
-        Download file from Telegram using TDLib.
-        Calls on_progress(file_name, downloaded, total, percent, speed, eta)
-        but does not send or edit any Telegram messages.
-        """
         start = time.time()
         last_time, last_downloaded = start, 0
 
@@ -38,14 +32,11 @@ class TDDownloader:
 
         while True:
             f = await self.client.invoke({"@type": "getFile", "file_id": fid})
-
-            # ✅ Download complete
             if getattr(f.local, "is_downloading_completed", False):
                 if on_progress:
                     await on_progress(file_name, f.expected_size, f.expected_size, 100.0, 0, 0)
                 break
 
-            # 🧮 Calculate progress
             downloaded = getattr(f.local, "downloaded_size", 0)
             total = getattr(f, "expected_size", 0)
             if total == 0:
@@ -58,7 +49,6 @@ class TDDownloader:
             percent = (downloaded / total) * 100
             eta = (total - downloaded) / speed if speed > 0 else 0
 
-            # 🔁 Call callback (no message inside lib)
             if on_progress:
                 try:
                     await on_progress(file_name, downloaded, total, percent, speed, eta)
@@ -71,10 +61,72 @@ class TDDownloader:
         logging.info(f"✅ Download complete: {file_name}")
         return f.local.path
 
-    async def upload_file(self, chat_id, file_path, caption="", file_type="document"):
+    async def upload_file(
+        self,
+        chat_id,
+        file_path,
+        caption="",
+        file_type="document",
+        *,
+        file_name=None,
+        thumb_path=None,
+        duration=None,
+        on_progress=None
+    ):
         """
-        Upload file to Telegram using TDLib.
+        🔹 Advanced TDLib Upload with:
+        - Progress callback
+        - Custom filename
+        - Thumbnail
+        - Duration (auto detect for video/audio)
         """
+
+        start = time.time()
+        last_time, last_uploaded = start, 0
+        file_name = file_name or os.path.basename(file_path)
+        total_size = os.path.getsize(file_path)
+
+        logging.info(f"🚀 Starting upload: {file_name} ({file_type})")
+
+        # 1️⃣ Start upload
+        result = await self.client.invoke({
+            "@type": "uploadFile",
+            "file": {"@type": "inputFileLocal", "path": file_path},
+            "priority": 1
+        })
+
+        fid = getattr(result, "id", None) or result.get("id")
+        if not fid:
+            raise ValueError("⚠️ Failed to start uploadFile (invalid response).")
+
+        # 2️⃣ Monitor progress
+        while True:
+            f = await self.client.invoke({"@type": "getFile", "file_id": fid})
+            uploaded = getattr(f.local, "uploaded_size", 0)
+
+            if getattr(f.local, "is_uploading_completed", False):
+                if on_progress:
+                    await on_progress(file_name, total_size, total_size, 100.0, 0, 0)
+                break
+
+            now = time.time()
+            diff = now - last_time
+            speed = (uploaded - last_uploaded) / diff if diff > 0 else 0
+            percent = (uploaded / total_size) * 100 if total_size > 0 else 0
+            eta = (total_size - uploaded) / speed if speed > 0 else 0
+
+            if on_progress:
+                try:
+                    await on_progress(file_name, uploaded, total_size, percent, speed, eta)
+                except Exception as e:
+                    logging.warning(f"⚠️ Upload progress callback error: {e}")
+
+            last_time, last_uploaded = now, uploaded
+            await asyncio.sleep(0.5)
+
+        logging.info(f"✅ Upload complete: {file_name}")
+
+        # 3️⃣ Prepare content
         types_map = {
             "document": "inputMessageDocument",
             "photo": "inputMessagePhoto",
@@ -85,16 +137,37 @@ class TDDownloader:
 
         content = {
             "@type": input_type,
-            file_type: {"@type": "inputFileLocal", "path": file_path},
+            file_type: {"@type": "inputFileId", "id": fid},
             "caption": {"@type": "formattedText", "text": caption},
         }
 
+        # Custom file name
+        if file_type == "document" and file_name:
+            content[file_type]["file_name"] = file_name
+
+        # Thumbnail
+        if thumb_path and os.path.exists(thumb_path):
+            content[file_type]["thumbnail"] = {
+                "@type": "inputThumbnail",
+                "thumbnail": {"@type": "inputFileLocal", "path": thumb_path},
+                "width": 320,
+                "height": 180
+            }
+
+        # Duration
+        if duration and file_type in ["video", "audio"]:
+            content[file_type]["duration"] = int(duration)
+
+        # 4️⃣ Send message
         await self.client.invoke({
             "@type": "sendMessage",
             "chat_id": chat_id,
             "input_message_content": content,
         })
+
+        logging.info(f"📤 Sent {file_type}: {file_name}")
         return True
+
 
     def run(self):
         print("⚡ TDDownloader client running...")
