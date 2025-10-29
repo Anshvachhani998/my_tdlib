@@ -129,8 +129,7 @@ class TDDownloader:
                     caption=caption,
                     thumbnail=thumb_path if thumb_path and os.path.exists(thumb_path) else None,
                     supports_streaming=True,
-                    duration=duration,
-                    file_name=file_name,
+                    duration=duration
                 )
 
             elif file_type == "photo":
@@ -146,7 +145,6 @@ class TDDownloader:
                     audio=file_path,
                     caption=caption,
                     duration=duration,
-                    file_name=file_name,
                     thumbnail=thumb_path if thumb_path and os.path.exists(thumb_path) else None,
                 )
 
@@ -155,7 +153,6 @@ class TDDownloader:
                     chat_id=chat_id,
                     document=file_path,
                     caption=caption,
-                    file_name=file_name,
                     thumbnail=thumb_path if thumb_path and os.path.exists(thumb_path) else None,
                 )
 
