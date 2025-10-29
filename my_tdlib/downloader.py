@@ -128,8 +128,7 @@ class TDDownloader:
                     video=file_path,
                     caption=caption,
                     thumbnail=thumb_path if thumb_path and os.path.exists(thumb_path) else None,
-                    supports_streaming=True,
-                    duration=duration
+                    duration=0
                 )
 
             elif file_type == "photo":
