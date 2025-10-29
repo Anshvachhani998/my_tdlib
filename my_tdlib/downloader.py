@@ -32,7 +32,7 @@ class TDDownloader:
             "synchronous": False,
         })
 
-        fid = getattr(result, "id", result.get("id", None))
+        fid = result.id if hasattr(result, "id") else result.get("id")
         if not fid:
             raise ValueError("⚠️ Invalid file ID or TDLib response.")
 
