@@ -125,7 +125,7 @@ class TDDownloader:
             if file_type == "video":
                 result = await self.client.sendVideo(
                     chat_id=chat_id,
-                    video=file_path,
+                    video={"@type": "inputFileLocal", "path": file_path},
                     caption=caption,
                     thumbnail=None,
                     duration=int(duration or 0)
