@@ -123,13 +123,14 @@ class TDDownloader:
         try:
             # 🔹 Native send methods
             if file_type == "video":
-                await self.client.sendVideo(
+                result = await self.client.sendVideo(
                     chat_id=chat_id,
                     video=file_path,
                     caption=caption,
                     thumbnail=None,
                     duration=int(duration or 0)
                 )
+                logging.info(f"Send result:  {result}")
 
             elif file_type == "photo":
                 await self.client.sendPhoto(
