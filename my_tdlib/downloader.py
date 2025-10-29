@@ -127,7 +127,7 @@ class TDDownloader:
                     chat_id=chat_id,
                     video=file_path,
                     caption=caption,
-                    thumbnail=thumb_path if thumb_path and os.path.exists(thumb_path) else None,
+                    thumbnail=None,
                     duration=int(duration or 0)
                 )
 
