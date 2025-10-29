@@ -4,7 +4,7 @@ import asyncio
 import time
 from .utils import format_size, format_time
 from .config import get_client
-
+import logging
 
 class TDDownloader:
     def __init__(self, api_id, api_hash, token, encryption_key="1234_ast$"):
@@ -101,7 +101,6 @@ class TDDownloader:
         self.client.run()
 
 
-# 🆕 ADD THIS BELOW
 class TDFileHelper:
     def __init__(self, td_client):
         self.client = td_client
@@ -121,34 +120,72 @@ class TDFileHelper:
             if not msg or not hasattr(msg, "content"):
                 return None
 
-            content = msg.content
+            return self._extract_file_data(msg.content, message_id)
+
+        except Exception as e:
+            logging.error(f"❌ Error fetching TDLib file info: {e}")
+            return None
+
+    async def get_file_info_from_link(self, link: str):
+        """
+        Fetch TDLib file info directly using Telegram message link.
+        Example: https://t.me/c/123456789/45
+        """
+        try:
+            info = await self.client.getMessageLinkInfo(link)
+            if not info or not hasattr(info, "message"):
+                logging.error(f"⚠️ Invalid or inaccessible link: {link}")
+                return None
+
+            chat_id = info.message.chat_id
+            message_id = info.message.id
+
+            msg_info = await self.client.getMessage(chat_id, message_id)
+            if not hasattr(msg_info, "content"):
+                logging.warning("⚠️ No content found in this message.")
+                return None
+
+            return self._extract_file_data(msg_info.content, message_id)
+
+        except Exception as e:
+            logging.error(f"❌ get_file_info_from_link error: {e}")
+            return None
+
+    def _extract_file_data(self, content, message_id: int):
+        """
+        Internal helper: extract file_id, name, and type from message content.
+        """
+        try:
             file_id = file_name = file_type = None
 
-            if hasattr(content, "document") and hasattr(content.document, "document"):
-                file_id = content.document.document.id
-                file_name = getattr(content.document, "file_name", "document")
-                file_type = "document"
-            elif hasattr(content, "video") and hasattr(content.video, "video"):
+            if hasattr(content, "video") and content.video:
                 file_id = content.video.video.id
                 file_name = getattr(content.video, "file_name", "video.mp4")
                 file_type = "video"
-            elif hasattr(content, "photo") and hasattr(content.photo.sizes[-1], "photo"):
+            elif hasattr(content, "document") and content.document:
+                file_id = content.document.document.id
+                file_name = getattr(content.document, "file_name", "document")
+                file_type = "document"
+            elif hasattr(content, "photo") and content.photo:
                 file_id = content.photo.sizes[-1].photo.id
                 file_name = f"photo_{message_id}.jpg"
                 file_type = "photo"
-            elif hasattr(content, "audio") and hasattr(content.audio, "audio"):
+            elif hasattr(content, "audio") and content.audio:
                 file_id = content.audio.audio.id
                 file_name = getattr(content.audio, "file_name", "audio.mp3")
                 file_type = "audio"
 
-            if file_id:
-                return {
-                    "file_id": file_id,
-                    "file_name": file_name,
-                    "file_type": file_type
-                }
-            return None
+            if not file_id:
+                logging.warning("⚠️ No downloadable file found.")
+                return None
+
+            logging.info(f"🆔 Extracted TDLib File: {file_name} ({file_type}) → {file_id}")
+            return {
+                "file_id": file_id,
+                "file_name": file_name,
+                "file_type": file_type
+            }
 
         except Exception as e:
-            print(f"❌ Error fetching TDLib file info: {e}")
+            logging.error(f"❌ _extract_file_data error: {e}")
             return None
