@@ -14,23 +14,15 @@ class TDDownloader:
         """
         self.client = get_client(api_id, api_hash, token, encryption_key)
 
-    async def download_file(self, file_id, file_name, on_progress=None):
+    async def download_file(self, file_id, file_name, *, on_progress=None):
         """
         Download file from Telegram using TDLib.
-        Optionally calls on_progress callback with download status.
-
-        Args:
-            file_id (int): TDLib file ID to download
-            file_name (str): Display name for progress reporting
-            on_progress (callable): Optional async callback
-                -> on_progress(file_name, downloaded, total, percent, speed, eta)
-        Returns:
-            str: Local path to the downloaded file
+        Calls on_progress(file_name, downloaded, total, percent, speed, eta)
+        but does not send or edit any Telegram messages.
         """
         start = time.time()
         last_time, last_downloaded = start, 0
 
-        # Start the download
         result = await self.client.invoke({
             "@type": "downloadFile",
             "file_id": file_id,
@@ -44,15 +36,16 @@ class TDDownloader:
         if not fid:
             raise ValueError("⚠️ Invalid file ID or TDLib response.")
 
-        # Poll download progress
         while True:
             f = await self.client.invoke({"@type": "getFile", "file_id": fid})
 
-            if hasattr(f.local, "is_downloading_completed") and f.local.is_downloading_completed:
+            # ✅ Download complete
+            if getattr(f.local, "is_downloading_completed", False):
                 if on_progress:
                     await on_progress(file_name, f.expected_size, f.expected_size, 100.0, 0, 0)
                 break
 
+            # 🧮 Calculate progress
             downloaded = getattr(f.local, "downloaded_size", 0)
             total = getattr(f, "expected_size", 0)
             if total == 0:
@@ -60,11 +53,12 @@ class TDDownloader:
                 continue
 
             now = time.time()
-            time_diff = now - last_time
-            speed = (downloaded - last_downloaded) / time_diff if time_diff > 0 else 0
+            diff = now - last_time
+            speed = (downloaded - last_downloaded) / diff if diff > 0 else 0
             percent = (downloaded / total) * 100
             eta = (total - downloaded) / speed if speed > 0 else 0
 
+            # 🔁 Call callback (no message inside lib)
             if on_progress:
                 try:
                     await on_progress(file_name, downloaded, total, percent, speed, eta)
