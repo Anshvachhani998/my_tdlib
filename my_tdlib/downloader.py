@@ -6,6 +6,7 @@ from .utils import format_size, format_time
 from .config import get_client
 import logging
 
+
 class TDDownloader:
     def __init__(self, api_id, api_hash, token, encryption_key="1234_ast$"):
         """
@@ -13,37 +14,23 @@ class TDDownloader:
         """
         self.client = get_client(api_id, api_hash, token, encryption_key)
 
-    async def _update_progress(self, message, file_name, downloaded, total, speed, is_upload=False):
-        if total == 0:
-            return
-        percent = (downloaded / total) * 100
-        bar_length = 20
-        filled = int(bar_length * downloaded / total)
-        bar = '█' * filled + '░' * (bar_length - filled)
-        eta = (total - downloaded) / speed if speed > 0 else 0
-        action = "⬆️ Uploading" if is_upload else "⬇️ Downloading"
-
-        progress = (
-            f"{action}: **{file_name}**\n\n"
-            f"`{bar}` {percent:.1f}%\n"
-            f"📊 **Size:** {format_size(downloaded)} / {format_size(total)}\n"
-            f"⚡ **Speed:** {format_size(speed)}/s\n"
-            f"⏱️ **ETA:** {format_time(eta)}"
-        )
-        try:
-            await message.edit_text(progress, parse_mode="markdown")
-        except:
-            pass
-
-    async def download_file(self, message, file_id, file_name):
+    async def download_file(self, file_id, file_name, on_progress=None):
         """
-        Download file from Telegram using TDLib with live progress.
-        Returns: local file path after download completion.
+        Download file from Telegram using TDLib.
+        Optionally calls on_progress callback with download status.
+
+        Args:
+            file_id (int): TDLib file ID to download
+            file_name (str): Display name for progress reporting
+            on_progress (callable): Optional async callback
+                -> on_progress(file_name, downloaded, total, percent, speed, eta)
+        Returns:
+            str: Local path to the downloaded file
         """
-        status_msg = await message.reply_text("⬇️ Starting download...")
         start = time.time()
         last_time, last_downloaded = start, 0
 
+        # Start the download
         result = await self.client.invoke({
             "@type": "downloadFile",
             "file_id": file_id,
@@ -52,23 +39,42 @@ class TDDownloader:
             "limit": 0,
             "synchronous": False,
         })
-        fid = result.id if hasattr(result, "id") else result.get("id")
 
+        fid = getattr(result, "id", result.get("id", None))
+        if not fid:
+            raise ValueError("⚠️ Invalid file ID or TDLib response.")
+
+        # Poll download progress
         while True:
             f = await self.client.invoke({"@type": "getFile", "file_id": fid})
+
             if hasattr(f.local, "is_downloading_completed") and f.local.is_downloading_completed:
-                await self._update_progress(status_msg, file_name, f.expected_size, f.expected_size, 0)
+                if on_progress:
+                    await on_progress(file_name, f.expected_size, f.expected_size, 100.0, 0, 0)
                 break
+
             downloaded = getattr(f.local, "downloaded_size", 0)
             total = getattr(f, "expected_size", 0)
+            if total == 0:
+                await asyncio.sleep(0.5)
+                continue
+
             now = time.time()
             time_diff = now - last_time
             speed = (downloaded - last_downloaded) / time_diff if time_diff > 0 else 0
-            await self._update_progress(status_msg, file_name, downloaded, total, speed)
+            percent = (downloaded / total) * 100
+            eta = (total - downloaded) / speed if speed > 0 else 0
+
+            if on_progress:
+                try:
+                    await on_progress(file_name, downloaded, total, percent, speed, eta)
+                except Exception as e:
+                    logging.warning(f"⚠️ Progress callback error: {e}")
+
             last_time, last_downloaded = now, downloaded
             await asyncio.sleep(0.5)
 
-        await status_msg.edit_text("✅ Download complete!")
+        logging.info(f"✅ Download complete: {file_name}")
         return f.local.path
 
     async def upload_file(self, chat_id, file_path, caption="", file_type="document"):
