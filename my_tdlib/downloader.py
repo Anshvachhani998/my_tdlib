@@ -102,7 +102,7 @@ class TDDownloader:
     ):
         """
         📤 Uploads file to Telegram using native TDLib methods.
-        Forces fresh upload (no cache reuse).
+        Forces real upload (no cache reuse).
         """
         file_name = file_name or os.path.basename(file_path)
         total_size = os.path.getsize(file_path)
@@ -123,10 +123,8 @@ class TDDownloader:
                     diff = now - last_time
                     speed = (uploaded - last_uploaded) / diff if diff > 0 else 0
                     eta = (total_size - uploaded) / speed if speed > 0 else 0
-
                     if on_progress:
                         await on_progress(file_name, uploaded, total_size, percent, speed, eta)
-
                     last_time, last_uploaded = now, uploaded
                     await asyncio.sleep(1)
                 except Exception:
@@ -135,49 +133,30 @@ class TDDownloader:
         progress_task = asyncio.create_task(monitor_progress()) if on_progress else None
 
         try:
-            # 🔹 Force delete cached remote file (if any)
-            try:
-                local_info = await self.client.invoke({"@type": "getFile", "file_id": file_path})
-                if local_info and getattr(local_info, "id", None):
-                    await self.client.invoke({"@type": "deleteFile", "file_id": local_info.id})
-                    logging.info(f"🧹 Deleted cached file reference id={local_info.id}")
-                await self.client.invoke({"@type": "getRemoteFile", "remote_file_id": ""})
-            except Exception as e:
-                logging.warning(f"⚠️ Cache clear skipped: {e}")
-
-            # 🔹 Force TDLib to see it as a brand new local file
+            # ✅ Force TDLib to treat this as new file
             if os.path.exists(file_path):
                 temp_copy = f"/tmp/{int(time.time())}_{os.path.basename(file_path)}"
                 os.system(f"cp '{file_path}' '{temp_copy}'")
+                try:
+                    with open(temp_copy, "ab") as f:
+                        f.write(b" ")  # add dummy byte
+                    logging.info("🧩 Appended dummy byte to break TDLib hash cache")
+                except Exception as e:
+                    logging.warning(f"⚠️ Could not append dummy byte: {e}")
                 file_path = temp_copy
                 logging.info(f"🧠 Forcing fresh path upload: {file_path}")
 
             input_file = {"@type": "inputFileLocal", "path": file_path}
-            logging.info(f"🧾 TDLib input file prepared: {input_file}//// {file_path}")
+            logging.info(f"🧾 TDLib input file prepared: {input_file}")
 
-            # 🔹 Send according to file type
             if file_type == "video":
-                result = await self.client.sendVideo(
-                    chat_id=chat_id,
-                    video=input_file,
-                    caption=caption,
-                    duration=int(duration or 0)
-                )
-
+                result = await self.client.sendVideo(chat_id=chat_id, video=input_file, caption=caption, duration=int(duration or 0))
             elif file_type == "photo":
                 result = await self.client.sendPhoto(chat_id=chat_id, photo=input_file, caption=caption)
-
             elif file_type == "audio":
-                result = await self.client.sendAudio(
-                    chat_id=chat_id,
-                    audio=input_file,
-                    caption=caption,
-                    duration=duration
-                )
-
+                result = await self.client.sendAudio(chat_id=chat_id, audio=input_file, caption=caption, duration=duration)
             elif file_type == "document":
                 result = await self.client.sendDocument(chat_id=chat_id, document=input_file, caption=caption)
-
             else:
                 logging.error(f"⚠️ Unsupported file_type: {file_type}")
                 return None
@@ -188,13 +167,20 @@ class TDDownloader:
             return result
 
         except Exception as e:
-            logging.error(f"❌ Error sending {file_type}: {e}", exc_info=True)
+            logging.error(f"❌ Error sending {file_type}: {e}")
             return None
 
         finally:
             upload_done.set()
             if progress_task:
                 await progress_task
+            try:
+                if file_path.startswith("/tmp/") and os.path.exists(file_path):
+                    os.remove(file_path)
+                    logging.info(f"🧹 Deleted temp file after upload: {file_path}")
+            except Exception as e:
+                logging.warning(f"⚠️ Failed to delete temp file: {e}")
+
 
 
 
