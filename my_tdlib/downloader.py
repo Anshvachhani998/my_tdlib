@@ -136,6 +136,7 @@ class TDDownloader:
 
         try:
             input_file = {"@type": "inputFileLocal", "path": file_path}
+            logging.info(f"🧾 TDLib input file prepared: {input_file}//// {file_path}")
 
             if file_type == "video":
                 result = await self.client.sendVideo(
