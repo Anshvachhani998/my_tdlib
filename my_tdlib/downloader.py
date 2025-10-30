@@ -135,18 +135,27 @@ class TDDownloader:
         progress_task = asyncio.create_task(monitor_progress()) if on_progress else None
 
         try:
-            # 🔹 Force delete any cached remote file reference
+            # 🔹 Force delete cached remote file (if any)
             try:
-                f = await self.client.invoke({"@type": "getRemoteFile", "remote_file_id": file_path})
-                if f and getattr(f, "id", None):
-                    await self.client.invoke({"@type": "deleteFile", "file_id": f.id})
-                    logging.info(f"🧹 Deleted cached remote file (id={f.id}) to force re-upload")
-            except Exception:
-                pass
+                local_info = await self.client.invoke({"@type": "getFile", "file_id": file_path})
+                if local_info and getattr(local_info, "id", None):
+                    await self.client.invoke({"@type": "deleteFile", "file_id": local_info.id})
+                    logging.info(f"🧹 Deleted cached file reference id={local_info.id}")
+                await self.client.invoke({"@type": "getRemoteFile", "remote_file_id": ""})
+            except Exception as e:
+                logging.warning(f"⚠️ Cache clear skipped: {e}")
+
+            # 🔹 Force TDLib to see it as a brand new local file
+            if os.path.exists(file_path):
+                temp_copy = f"/tmp/{int(time.time())}_{os.path.basename(file_path)}"
+                os.system(f"cp '{file_path}' '{temp_copy}'")
+                file_path = temp_copy
+                logging.info(f"🧠 Forcing fresh path upload: {file_path}")
 
             input_file = {"@type": "inputFileLocal", "path": file_path}
             logging.info(f"🧾 TDLib input file prepared: {input_file}//// {file_path}")
 
+            # 🔹 Send according to file type
             if file_type == "video":
                 result = await self.client.sendVideo(
                     chat_id=chat_id,
@@ -179,13 +188,14 @@ class TDDownloader:
             return result
 
         except Exception as e:
-            logging.error(f"❌ Error sending {file_type}: {e}")
+            logging.error(f"❌ Error sending {file_type}: {e}", exc_info=True)
             return None
 
         finally:
             upload_done.set()
             if progress_task:
                 await progress_task
+
 
 
             
