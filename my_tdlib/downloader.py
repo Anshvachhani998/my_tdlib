@@ -101,86 +101,70 @@ class TDDownloader:
         on_progress=None
     ):
         """
-        🚀 Direct TDLib Media Uploader + Progress Bar
-        ---------------------------------------------
-        Uses only native send methods:
-        - sendVideo / sendPhoto / sendAudio / sendDocument
-        + real-time progress updates via updateFile events
+        📤 Uploads file to Telegram using native TDLib methods.
+        Supports: video, photo, audio, document.
         """
-
         file_name = file_name or os.path.basename(file_path)
         total_size = os.path.getsize(file_path)
-        logging.info(f"📤 Upload started: {file_name} ({file_type})")
+        logging.info(f"📤 Upload started: {file_name} ({total_size/1024/1024:.2f} MB)")
 
         upload_done = asyncio.Event()
         start_time = time.time()
         last_time, last_uploaded = start_time, 0
 
-        # 🔹 Background task to monitor file progress
+        # 🔹 Local progress monitor
         async def monitor_progress():
             nonlocal last_time, last_uploaded
             while not upload_done.is_set():
                 try:
-                    files = await self.client.invoke({"@type": "getRemoteFile", "remote_file_id": file_path})
-                except Exception:
-                    await asyncio.sleep(0.5)
-                    continue
+                    uploaded = os.path.getsize(file_path)
+                    percent = (uploaded / total_size) * 100 if total_size else 0
+                    now = time.time()
+                    diff = now - last_time
+                    speed = (uploaded - last_uploaded) / diff if diff > 0 else 0
+                    eta = (total_size - uploaded) / speed if speed > 0 else 0
 
-                # TDLib doesn't always expose progress easily, so fallback to os.path stats
-                uploaded = os.path.getsize(file_path) if os.path.exists(file_path) else 0
-                percent = (uploaded / total_size) * 100 if total_size else 0
-                now = time.time()
-                diff = now - last_time
-                speed = (uploaded - last_uploaded) / diff if diff > 0 else 0
-                eta = (total_size - uploaded) / speed if speed > 0 else 0
-
-                if on_progress:
-                    try:
+                    if on_progress:
                         await on_progress(file_name, uploaded, total_size, percent, speed, eta)
-                    except Exception as e:
-                        logging.warning(f"⚠️ Progress callback error: {e}")
 
-                last_time, last_uploaded = now, uploaded
-                await asyncio.sleep(0.5)
+                    last_time, last_uploaded = now, uploaded
+                    await asyncio.sleep(1)
+                except Exception:
+                    await asyncio.sleep(1)
 
-        progress_task = None
-        if on_progress:
-            progress_task = asyncio.create_task(monitor_progress())
+        progress_task = asyncio.create_task(monitor_progress()) if on_progress else None
 
         try:
-            # 🔹 Native send methods
+            input_file = {"@type": "inputFileLocal", "path": file_path}
+
             if file_type == "video":
                 result = await self.client.sendVideo(
                     chat_id=chat_id,
-                    video={"@type": "inputFileLocal", "path": file_path},
+                    video=input_file,
                     caption=caption,
-                    thumbnail=None,
                     duration=int(duration or 0)
                 )
-                logging.info(f"Send result:  {result}")
 
             elif file_type == "photo":
-                await self.client.sendPhoto(
+                result = await self.client.sendPhoto(
                     chat_id=chat_id,
-                    photo=file_path,
-                    caption=caption,
+                    photo=input_file,
+                    caption=caption
                 )
 
             elif file_type == "audio":
-                await self.client.sendAudio(
+                result = await self.client.sendAudio(
                     chat_id=chat_id,
-                    audio=file_path,
+                    audio=input_file,
                     caption=caption,
-                    duration=duration,
-                    thumbnail=thumb_path if thumb_path and os.path.exists(thumb_path) else None,
+                    duration=duration
                 )
 
             elif file_type == "document":
-                await self.client.sendDocument(
+                result = await self.client.sendDocument(
                     chat_id=chat_id,
-                    document=file_path,
-                    caption=caption,
-                    thumbnail=thumb_path if thumb_path and os.path.exists(thumb_path) else None,
+                    document=input_file,
+                    caption=caption
                 )
 
             else:
@@ -190,9 +174,11 @@ class TDDownloader:
             logging.info(f"✅ Upload complete: {file_name}")
             if on_progress:
                 await on_progress(file_name, total_size, total_size, 100.0, 0, 0)
+            return result
 
         except Exception as e:
             logging.error(f"❌ Error sending {file_type}: {e}")
+            return None
 
         finally:
             upload_done.set()
