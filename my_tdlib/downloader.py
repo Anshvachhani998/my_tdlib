@@ -102,7 +102,7 @@ class TDDownloader:
     ):
         """
         📤 Uploads file to Telegram using native TDLib methods.
-        Supports: video, photo, audio, document.
+        Forces fresh upload (no cache reuse).
         """
         file_name = file_name or os.path.basename(file_path)
         total_size = os.path.getsize(file_path)
@@ -135,6 +135,15 @@ class TDDownloader:
         progress_task = asyncio.create_task(monitor_progress()) if on_progress else None
 
         try:
+            # 🔹 Force delete any cached remote file reference
+            try:
+                f = await self.client.invoke({"@type": "getRemoteFile", "remote_file_id": file_path})
+                if f and getattr(f, "id", None):
+                    await self.client.invoke({"@type": "deleteFile", "file_id": f.id})
+                    logging.info(f"🧹 Deleted cached remote file (id={f.id}) to force re-upload")
+            except Exception:
+                pass
+
             input_file = {"@type": "inputFileLocal", "path": file_path}
             logging.info(f"🧾 TDLib input file prepared: {input_file}//// {file_path}")
 
@@ -147,11 +156,7 @@ class TDDownloader:
                 )
 
             elif file_type == "photo":
-                result = await self.client.sendPhoto(
-                    chat_id=chat_id,
-                    photo=input_file,
-                    caption=caption
-                )
+                result = await self.client.sendPhoto(chat_id=chat_id, photo=input_file, caption=caption)
 
             elif file_type == "audio":
                 result = await self.client.sendAudio(
@@ -162,11 +167,7 @@ class TDDownloader:
                 )
 
             elif file_type == "document":
-                result = await self.client.sendDocument(
-                    chat_id=chat_id,
-                    document=input_file,
-                    caption=caption
-                )
+                result = await self.client.sendDocument(chat_id=chat_id, document=input_file, caption=caption)
 
             else:
                 logging.error(f"⚠️ Unsupported file_type: {file_type}")
@@ -185,6 +186,7 @@ class TDDownloader:
             upload_done.set()
             if progress_task:
                 await progress_task
+
 
             
     def run(self):
