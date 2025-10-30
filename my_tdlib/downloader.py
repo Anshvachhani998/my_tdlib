@@ -13,53 +13,80 @@ class TDDownloader:
     def __init__(self, api_id, api_hash, token, encryption_key="1234_ast$"):
         self.client = get_client(api_id, api_hash, token, encryption_key)
 
-    async def download_file(self, file_id, file_name, *, on_progress=None):
-        start = time.time()
-        last_time, last_downloaded = start, 0
+    async def download_file(self, link, file_name, *, on_progress=None):
+        """
+        Download a file from message link using TDLib (pytdbot)
+        Supports progress callback.
+        """
+        try:
+            # 🔹 Step 1: Get message info from the link
+            info = await self.client.getMessageLinkInfo(link)
+            if not info:
+                logging.warning("⚠️ Invalid or inaccessible link.")
+                return None
 
-        result = await self.client.invoke({
-            "@type": "downloadFile",
-            "file_id": file_id,
-            "priority": 32,
-            "offset": 0,
-            "limit": 0,
-            "synchronous": False,
-        })
+            chat_id = info.chat_id
+            message_id = info.message.id
+            logging.info(f"🔗 Getting message from chat {chat_id}, msg_id {message_id}")
 
-        fid = result.id if hasattr(result, "id") else result.get("id")
-        if not fid:
-            raise ValueError("⚠️ Invalid file ID or TDLib response.")
+            # 🔹 Step 2: Fetch full message
+            public_msg = await self.client.getMessage(chat_id, message_id)
+            if not public_msg:
+                logging.warning("⚠️ Could not retrieve message.")
+                return None
 
-        while True:
-            f = await self.client.invoke({"@type": "getFile", "file_id": fid})
-            if getattr(f.local, "is_downloading_completed", False):
-                if on_progress:
-                    await on_progress(file_name, f.expected_size, f.expected_size, 100.0, 0, 0)
-                break
+            # 🔹 Step 3: Detect content type
+            content = public_msg.content
+            if hasattr(content, "video"):
+                media = content.video.video
+            elif hasattr(content, "photo"):
+                media = content.photo.sizes[-1].photo
+            elif hasattr(content, "document"):
+                media = content.document.document
+            else:
+                raise ValueError("⚠️ Unsupported media type.")
 
-            downloaded = getattr(f.local, "downloaded_size", 0)
-            total = getattr(f, "expected_size", 0)
-            if total == 0:
-                await asyncio.sleep(0.5)
-                continue
+            start_time = time.time()
+            last_time, last_downloaded = start_time, 0
 
-            now = time.time()
-            diff = now - last_time
-            speed = (downloaded - last_downloaded) / diff if diff > 0 else 0
-            percent = (downloaded / total) * 100
-            eta = (total - downloaded) / speed if speed > 0 else 0
+            # 🔹 Step 4: Define progress handler
+            async def progress_worker():
+                nonlocal last_time, last_downloaded
+                while True:
+                    f = await self.client.getFile(media.id)
+                    downloaded = getattr(f.local, "downloaded_size", 0)
+                    total = getattr(f, "expected_size", 0) or 1
+                    percent = (downloaded / total) * 100
+                    now = time.time()
+                    diff = now - last_time
+                    speed = (downloaded - last_downloaded) / diff if diff > 0 else 0
+                    eta = (total - downloaded) / speed if speed > 0 else 0
 
-            if on_progress:
-                try:
-                    await on_progress(file_name, downloaded, total, percent, speed, eta)
-                except Exception as e:
-                    logging.warning(f"⚠️ Progress callback error: {e}")
+                    if on_progress:
+                        try:
+                            await on_progress(file_name, downloaded, total, percent, speed, eta)
+                        except Exception as e:
+                            logging.warning(f"⚠️ Progress callback error: {e}")
 
-            last_time, last_downloaded = now, downloaded
-            await asyncio.sleep(0.5)
+                    last_time, last_downloaded = now, downloaded
 
-        logging.info(f"✅ Download complete: {file_name}")
-        return f.local.path
+                    if getattr(f.local, "is_downloading_completed", False):
+                        break
+                    await asyncio.sleep(0.5)
+
+            # 🔹 Step 5: Start download
+            logging.info(f"⬇️ Starting TDLib download: {file_name}")
+            progress_task = asyncio.create_task(progress_worker())
+            result = await media.download(priority=1, synchronous=True)
+            await progress_task
+
+            path = getattr(result.local, "path", None)
+            logging.info(f"✅ Download complete: {path}")
+            return path
+
+        except Exception as e:
+            logging.error(f"❌ TDLib download failed: {e}", exc_info=True)
+            return None
 
     async def upload_file(
         self,
