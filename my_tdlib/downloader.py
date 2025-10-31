@@ -7,53 +7,42 @@ import logging
 import math
 import subprocess
 from .config import get_client
-
+from pytdbot import types
 
 class TDDownloader:
     def __init__(self, api_id, api_hash, token, encryption_key="1234_ast$"):
         self.client = get_client(api_id, api_hash, token, encryption_key)
-        # ✅ attach TDLib built-in handler (correct way)
-        self.client.add_handler(self.on_updateFile, "updateFile")
-        self._upload_sessions = {}  # store progress refs
 
-    async def on_updateFile(self, client, update):
-        """📊 Real-time upload progress callback via TDLib event"""
+        # ✅ add file update listener for upload progress
+        self.client.add_handler(self._on_update_file, types.UpdateFile)
+        logging.info("📡 TDDownloader initialized with UpdateFile handler.")
+
+    async def _on_update_file(self, client, update):
+        """
+        Internal TDLib event handler for file upload/download progress updates.
+        This triggers automatically whenever TDLib emits an updateFile event.
+        """
         try:
+            if not hasattr(update, "file") or not hasattr(update.file, "local"):
+                return
+
             f = update.file
-            local = getattr(f, "local", None)
-            if not local or not local.is_uploading_active:
-                return
+            local = f.local
+            path = getattr(local, "path", None)
+            uploaded = getattr(local, "uploaded_size", None)
+            downloaded = getattr(local, "downloaded_size", None)
+            completed = getattr(local, "is_downloading_completed", None)
 
-            session = self._upload_sessions.get(f.id)
-            if not session:
-                return
+            # ✅ Just log when update happens (for debugging)
+            if uploaded:
+                logging.info(f"📤 Upload progress: {uploaded / 1024 / 1024:.2f} MB uploaded")
+            elif downloaded:
+                logging.info(f"⬇️ Download progress: {downloaded / 1024 / 1024:.2f} MB downloaded")
+            elif completed:
+                logging.info(f"✅ File completed: {path}")
 
-            uploaded = getattr(local, "uploaded_size", 0)
-            total = session["total"]
-            now = time.time()
-            diff = now - session["last_time"]
-            speed = (uploaded - session["last_uploaded"]) / diff if diff > 0 else 0
-            percent = (uploaded / total * 100) if total else 0
-            eta = (total - uploaded) / speed if speed > 0 else 0
-
-            session["last_time"] = now
-            session["last_uploaded"] = uploaded
-
-            bar_len = 25
-            filled = int(bar_len * percent // 100)
-            bar = "█" * filled + "░" * (bar_len - filled)
-            logging.info(
-                f"\r📤 Uploading: {session['name']}\n"
-                f"Progress: {percent:.1f}% ({uploaded/1024/1024:.2f}/{total/1024/1024:.2f} MB)\n"
-                f"Speed: {speed/1024:.1f} KB/s | ETA: {eta:.1f}s\n[{bar}] ",
-                extra={"flush": True}
-            )
-
-            if uploaded >= total:
-                session["done"].set()
-                logging.info(f"\n✅ Upload complete: {session['name']}")
         except Exception as e:
-            logging.warning(f"⚠️ on_updateFile error: {e}")
+            logging.warning(f"⚠️ UpdateFile handler error: {e}")
 
     async def download_file(self, link, file_name, *, on_progress=None):
         """
