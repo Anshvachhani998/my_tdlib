@@ -12,37 +12,21 @@ from pytdbot import types
 class TDDownloader:
     def __init__(self, api_id, api_hash, token, encryption_key="1234_ast$"):
         self.client = get_client(api_id, api_hash, token, encryption_key)
+        self.upload_progress = {}
 
-        # ✅ add file update listener for upload progress
-        self.client.add_handler(self._on_update_file, types.UpdateFile)
-        logging.info("📡 TDDownloader initialized with UpdateFile handler.")
 
-    async def _on_update_file(self, client, update):
-        """
-        Internal TDLib event handler for file upload/download progress updates.
-        This triggers automatically whenever TDLib emits an updateFile event.
-        """
-        try:
-            if not hasattr(update, "file") or not hasattr(update.file, "local"):
-                return
+        # Register handler correctly
+        self.client.add_event_handler(self._on_update_file, "updateFile")
 
-            f = update.file
-            local = f.local
-            path = getattr(local, "path", None)
-            uploaded = getattr(local, "uploaded_size", None)
-            downloaded = getattr(local, "downloaded_size", None)
-            completed = getattr(local, "is_downloading_completed", None)
-
-            # ✅ Just log when update happens (for debugging)
-            if uploaded:
-                logging.info(f"📤 Upload progress: {uploaded / 1024 / 1024:.2f} MB uploaded")
-            elif downloaded:
-                logging.info(f"⬇️ Download progress: {downloaded / 1024 / 1024:.2f} MB downloaded")
-            elif completed:
-                logging.info(f"✅ File completed: {path}")
-
-        except Exception as e:
-            logging.warning(f"⚠️ UpdateFile handler error: {e}")
+    async def _on_update_file(self, update, *args):
+        if update.get("@type") == "updateFile":
+            file_info = update["file"]
+            local = file_info.get("local", {})
+            if "downloaded_size" in local and "size" in local and local["size"] > 0:
+                downloaded = local["downloaded_size"]
+                total = local["size"]
+                percent = (downloaded / total) * 100
+                print(f"📤 Upload progress: {percent:.2f}% ({downloaded}/{total} bytes)")
 
     async def download_file(self, link, file_name, *, on_progress=None):
         """
