@@ -11,7 +11,7 @@ from pytdbot import types
 
 class TDDownloader:
     def __init__(self, api_id, api_hash, token, encryption_key="1234_ast$"):
-        self.client = TD(api_id, api_hash, token, encryption_key)
+        self.client = get_client(api_id, api_hash, token, encryption_key)
         self.upload_progress = {}
 
 
