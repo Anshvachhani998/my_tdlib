@@ -16,7 +16,7 @@ class TDDownloader:
 
 
         # Register handler correctly
-        self.client.add_event_handler(self._on_update_file, "updateFile")
+        self.client.add_handler(self._on_update_file, types.UpdateFile)
 
     async def _on_update_file(self, update, *args):
         if update.get("@type") == "updateFile":
