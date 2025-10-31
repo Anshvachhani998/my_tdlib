@@ -96,98 +96,118 @@ class TDDownloader:
         file_type="document",
         *,
         file_name=None,
+        thumb_path=None,
         duration=None,
         on_progress=None
     ):
         """
-        📤 Uploads file to Telegram using TDLib (forces fresh upload, bypasses cache)
+        📤 Uploads file to Telegram using native TDLib methods.
+        Shows real-time progress (using updateFile event).
         """
         file_name = file_name or os.path.basename(file_path)
         total_size = os.path.getsize(file_path)
         logging.info(f"📤 Upload started: {file_name} ({total_size/1024/1024:.2f} MB)")
 
+        # ✅ Create Event and progress tracking
         upload_done = asyncio.Event()
-
-        # 🧩 Step 1: Break TDLib hash cache
-        try:
-            with open(file_path, "ab") as f:
-                f.write(b"\0")
-            logging.info("🧩 Appended dummy byte to break TDLib hash cache")
-        except Exception as e:
-            logging.warning(f"⚠️ Dummy byte append failed: {e}")
-
-        # 🧠 Step 2: Copy to /tmp path for fresh upload
-        if os.path.exists(file_path):
-            temp_copy = f"/tmp/{int(time.time())}_{os.path.basename(file_path)}"
-            os.system(f"cp '{file_path}' '{temp_copy}'")
-            file_path = temp_copy
-            logging.info(f"🧠 Forcing fresh path upload: {file_path}")
-
         start_time = time.time()
-        last_uploaded = 0
+        progress_data = {"uploaded": 0}
 
-        async def progress_bar(sent_bytes, total_bytes):
-            percent = (sent_bytes / total_bytes) * 100 if total_bytes else 0
-            now = time.time()
-            elapsed = now - start_time
-            speed = sent_bytes / elapsed if elapsed > 0 else 0
-            eta = (total_bytes - sent_bytes) / speed if speed > 0 else 0
-            bar = "█" * int(percent / 4) + "░" * (25 - int(percent / 4))
-            logging.info(
-                f"📤 Uploading...\n\n"
-                f"File: {file_name}\n"
-                f"Progress: {percent:.1f}%\n"
-                f"Speed: {speed/1024:.1f} KB/s\n"
-                f"ETA: {eta:.1f}s\n"
-                f"[{bar}]"
-            )
+        # 🔹 TDLib upload progress listener (real bytes)
+        async def handle_update_file(_, update):
+            try:
+                if not hasattr(update, "file"):
+                    return
+                file = update.file
+                local = getattr(file, "local", None)
+                if not local or not hasattr(local, "uploaded_size"):
+                    return
 
-        # Fake smooth progress simulator
-        async def fake_progress():
-            sent = 0
-            while sent < total_size:
-                await asyncio.sleep(1)
-                sent += total_size / 50  # 2% per second
-                if sent > total_size:
-                    sent = total_size
-                await progress_bar(sent, total_size)
-            upload_done.set()
+                uploaded = local.uploaded_size
+                if uploaded <= progress_data["uploaded"]:
+                    return  # ignore no progress
 
-        progress_task = asyncio.create_task(fake_progress())
+                progress_data["uploaded"] = uploaded
+                now = time.time()
+                elapsed = now - start_time
+                speed = uploaded / elapsed if elapsed > 0 else 0
+                percent = (uploaded / total_size) * 100 if total_size else 0
+                eta = (total_size - uploaded) / speed if speed > 0 else 0
+
+                # call progress callback
+                if on_progress:
+                    await on_progress(file_name, uploaded, total_size, percent, speed, eta)
+
+                # log progress bar
+                bar_len = 25
+                filled = int(bar_len * percent // 100)
+                bar = "█" * filled + "░" * (bar_len - filled)
+                logging.info(
+                    f"\r📤 Uploading: {file_name}\n"
+                    f"Progress: {percent:.1f}% | {speed/1024:.1f} KB/s | ETA: {eta:.1f}s\n[{bar}] ",
+                    end="", flush=True
+                )
+
+                if uploaded >= total_size:
+                    upload_done.set()
+                    print(f"\n✅ Upload complete: {file_name}")
+            except Exception as e:
+                logging.warning(f"⚠️ Progress handler error: {e}")
+
+        # Register TDLib update listener
+        self.client.add_event_handler(handle_update_file, "updateFile")
 
         try:
+            # ✅ Force TDLib to treat this as a new file
+            if os.path.exists(file_path):
+                temp_copy = f"/tmp/{int(time.time())}_{os.path.basename(file_path)}"
+                os.system(f"cp '{file_path}' '{temp_copy}'")
+                try:
+                    with open(temp_copy, "ab") as f:
+                        f.write(b" ")
+                    logging.info("🧩 Appended dummy byte to break TDLib hash cache")
+                except Exception as e:
+                    logging.warning(f"⚠️ Could not append dummy byte: {e}")
+                file_path = temp_copy
+                logging.info(f"🧠 Forcing fresh path upload: {file_path}")
+
             input_file = {"@type": "inputFileLocal", "path": file_path}
             logging.info(f"🧾 TDLib input file prepared: {input_file}")
 
+            # ✅ Upload file using correct TDLib method
             if file_type == "video":
-                result = await self.client.sendVideo(chat_id=chat_id, video=input_file, caption=caption)
+                result = await self.client.sendVideo(
+                    chat_id=chat_id, video=input_file, caption=caption, duration=int(duration or 0)
+                )
             elif file_type == "photo":
                 result = await self.client.sendPhoto(chat_id=chat_id, photo=input_file, caption=caption)
             elif file_type == "audio":
-                result = await self.client.sendAudio(chat_id=chat_id, audio=input_file, caption=caption)
+                result = await self.client.sendAudio(chat_id=chat_id, audio=input_file, caption=caption, duration=duration)
             elif file_type == "document":
                 result = await self.client.sendDocument(chat_id=chat_id, document=input_file, caption=caption)
             else:
                 logging.error(f"⚠️ Unsupported file_type: {file_type}")
                 return None
 
-            await progress_bar(total_size, total_size)
+            await upload_done.wait()
             logging.info(f"✅ Upload complete: {file_name}")
+
+            if on_progress:
+                await on_progress(file_name, total_size, total_size, 100.0, 0, 0)
             return result
 
         except Exception as e:
-            logging.error(f"❌ Error sending {file_type}: {e}", exc_info=True)
+            logging.error(f"❌ Error sending {file_type}: {e}")
             return None
 
         finally:
-            upload_done.set()
-            await progress_task
             try:
-                if os.path.exists(file_path) and "/tmp/" in file_path:
+                if file_path.startswith("/tmp/") and os.path.exists(file_path):
                     os.remove(file_path)
-                    logging.info(f"🧹 Temp file deleted: {file_path}")
-            except Exception:
-                pass
+                    logging.info(f"🧹 Deleted temp file after upload: {file_path}")
+            except Exception as e:
+                logging.warning(f"⚠️ Failed to delete temp file: {e}")
+
 
     def run(self):
         print("⚡ TDDownloader client running...")
