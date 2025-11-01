@@ -7,26 +7,11 @@ import logging
 import math
 import subprocess
 from .config import get_client
-from pytdbot import types
+
 
 class TDDownloader:
     def __init__(self, api_id, api_hash, token, encryption_key="1234_ast$"):
         self.client = get_client(api_id, api_hash, token, encryption_key)
-        self.upload_progress = {}
-
-
-        # Register handler correctly
-        self.client.add_handler(self._on_update_file, "updateFile")
-
-    async def _on_update_file(self, update, *args):
-        if update.get("@type") == "updateFile":
-            file_info = update["file"]
-            local = file_info.get("local", {})
-            if "downloaded_size" in local and "size" in local and local["size"] > 0:
-                downloaded = local["downloaded_size"]
-                total = local["size"]
-                percent = (downloaded / total) * 100
-                print(f"📤 Upload progress: {percent:.2f}% ({downloaded}/{total} bytes)")
 
     async def download_file(self, link, file_name, *, on_progress=None):
         """
@@ -117,44 +102,55 @@ class TDDownloader:
     ):
         """
         📤 Uploads file to Telegram using native TDLib methods.
-        Tracks real-time progress through TDLib updateFile event.
+        Forces real upload (no cache reuse).
         """
         file_name = file_name or os.path.basename(file_path)
         total_size = os.path.getsize(file_path)
         logging.info(f"📤 Upload started: {file_name} ({total_size/1024/1024:.2f} MB)")
 
-        # force TDLib re-upload
-        if os.path.exists(file_path):
-            temp_copy = f"/tmp/{int(time.time())}_{os.path.basename(file_path)}"
-            os.system(f"cp '{file_path}' '{temp_copy}'")
-            try:
-                with open(temp_copy, "ab") as f:
-                    f.write(b" ")
-                logging.info("🧩 Appended dummy byte to break TDLib hash cache")
-            except Exception as e:
-                logging.warning(f"⚠️ Could not append dummy byte: {e}")
-            file_path = temp_copy
-            logging.info(f"🧠 Forcing fresh path upload: {file_path}")
-
-        # register upload session
         upload_done = asyncio.Event()
-        self._upload_sessions[id(file_path)] = {
-            "name": file_name,
-            "total": total_size,
-            "done": upload_done,
-            "last_time": time.time(),
-            "last_uploaded": 0,
-        }
+        start_time = time.time()
+        last_time, last_uploaded = start_time, 0
 
-        input_file = {"@type": "inputFileLocal", "path": file_path}
-        logging.info(f"🧾 TDLib input file prepared: {input_file}")
+        # 🔹 Local progress monitor
+        async def monitor_progress():
+            nonlocal last_time, last_uploaded
+            while not upload_done.is_set():
+                try:
+                    uploaded = os.path.getsize(file_path)
+                    percent = (uploaded / total_size) * 100 if total_size else 0
+                    now = time.time()
+                    diff = now - last_time
+                    speed = (uploaded - last_uploaded) / diff if diff > 0 else 0
+                    eta = (total_size - uploaded) / speed if speed > 0 else 0
+                    if on_progress:
+                        await on_progress(file_name, uploaded, total_size, percent, speed, eta)
+                    last_time, last_uploaded = now, uploaded
+                    await asyncio.sleep(1)
+                except Exception:
+                    await asyncio.sleep(1)
 
-        # choose TDLib method
+        progress_task = asyncio.create_task(monitor_progress()) if on_progress else None
+
         try:
+            # ✅ Force TDLib to treat this as new file
+            if os.path.exists(file_path):
+                temp_copy = f"/tmp/{int(time.time())}_{os.path.basename(file_path)}"
+                os.system(f"cp '{file_path}' '{temp_copy}'")
+                try:
+                    with open(temp_copy, "ab") as f:
+                        f.write(b" ")  # add dummy byte
+                    logging.info("🧩 Appended dummy byte to break TDLib hash cache")
+                except Exception as e:
+                    logging.warning(f"⚠️ Could not append dummy byte: {e}")
+                file_path = temp_copy
+                logging.info(f"🧠 Forcing fresh path upload: {file_path}")
+
+            input_file = {"@type": "inputFileLocal", "path": file_path}
+            logging.info(f"🧾 TDLib input file prepared: {input_file}")
+
             if file_type == "video":
-                result = await self.client.sendVideo(
-                    chat_id=chat_id, video=input_file, caption=caption, duration=int(duration or 0)
-                )
+                result = await self.client.sendVideo(chat_id=chat_id, video=input_file, caption=caption, duration=int(duration or 0))
             elif file_type == "photo":
                 result = await self.client.sendPhoto(chat_id=chat_id, photo=input_file, caption=caption)
             elif file_type == "audio":
@@ -165,9 +161,9 @@ class TDDownloader:
                 logging.error(f"⚠️ Unsupported file_type: {file_type}")
                 return None
 
-            # wait until progress listener marks done
-            await upload_done.wait()
             logging.info(f"✅ Upload complete: {file_name}")
+            if on_progress:
+                await on_progress(file_name, total_size, total_size, 100.0, 0, 0)
             return result
 
         except Exception as e:
@@ -175,14 +171,24 @@ class TDDownloader:
             return None
 
         finally:
-            if file_path.startswith("/tmp/") and os.path.exists(file_path):
-                os.remove(file_path)
-                logging.info(f"🧹 Deleted temp file after upload: {file_path}")
-            self._upload_sessions.pop(id(file_path), None)
+            upload_done.set()
+            if progress_task:
+                await progress_task
+            try:
+                if file_path.startswith("/tmp/") and os.path.exists(file_path):
+                    os.remove(file_path)
+                    logging.info(f"🧹 Deleted temp file after upload: {file_path}")
+            except Exception as e:
+                logging.warning(f"⚠️ Failed to delete temp file: {e}")
 
+
+
+
+            
     def run(self):
         print("⚡ TDDownloader client running...")
         self.client.run()
+
 
 class TDFileHelper:
     def __init__(self, td_client):
